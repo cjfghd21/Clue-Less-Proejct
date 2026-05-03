@@ -3,8 +3,9 @@ const Board = require('./Board');
 const Deck = require('./Deck');
 
 class Game {
-  constructor(io) {
+  constructor(io,roomCode) {
     this.io = io;
+    this.roomCode = roomCode;
     this.winner = null;
     this.board = new Board();
     this.players = [];           // { id, character, location, hand: [], eliminated: false }
@@ -43,13 +44,29 @@ class Game {
   }
 
   removePlayer(socketId) {
-    const index = this.players.findIndex(
-        player => player.id === socketId
-    );
+    const index = this.players.findIndex(player => player.id === socketId);
 
     if (index !== -1) {
-        const removedPlayer = this.players.splice(index, 1)[0];
-        return removedPlayer;
+      const removedPlayer = this.players.splice(index, 1)[0];
+
+      // Free hallway if removed player was standing in one
+      if (removedPlayer.location && this.board.locations[removedPlayer.location]?.type === "hallway") {
+        this.occupiedHallways = this.occupiedHallways.filter(
+          h => h !== removedPlayer.location
+        );
+      }
+
+      // Adjust turn if current player left
+      if (removedPlayer.id === this.currentPlayerId) {
+        if (this.players.length > 0 && !this.gameOver) {
+          this.turnIndex = this.turnIndex % this.players.length;
+          this.currentPlayerId = this.players[this.turnIndex].id;
+        } else {
+          this.currentPlayerId = null;
+        }
+      }
+
+      return removedPlayer;
     }
 
     return null;
@@ -352,6 +369,7 @@ class Game {
         suggested: p.suggested,
         ready: p.ready
       })),
+      roomCode: this.roomCode,
       currentPlayer: this.currentPlayerId,
       gameOver: this.gameOver,
       lastSuggestion: this.lastSuggestion,
@@ -372,6 +390,7 @@ class Game {
         suggested: p.suggested,
         ready: p.ready
       })),
+      roomCode: this.roomCode,
       currentPlayer: this.currentPlayerId,
       gameOver: this.gameOver,
       lastSuggestion: this.lastSuggestion,
@@ -385,7 +404,7 @@ class Game {
       return;
     }
 
-    this.io.emit("GAME_STATE_UPDATE", state);
+    this.io.to(this.roomCode).emit("GAME_STATE_UPDATE", state);
 
     // In Socket{} code: io.emit('GAME_STATE_UPDATE', state);
     // Private hand is sent separately to each player
