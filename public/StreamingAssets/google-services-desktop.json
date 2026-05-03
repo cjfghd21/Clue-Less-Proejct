@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "694240269835",
+    "firebase_url": "https://clue-less-database-default-rtdb.firebaseio.com",
+    "project_id": "clue-less-database",
+    "storage_bucket": "clue-less-database.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:694240269835:android:de899456b1f78e063a190e",
+        "android_client_info": {
+          "package_name": "com.company.ClueLess"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAYLS8zrIHP2ByPf3ad_ZpB3CUAV5TmKoU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
