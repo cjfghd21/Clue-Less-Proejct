@@ -46,30 +46,122 @@ class Game {
   removePlayer(socketId) {
     const index = this.players.findIndex(player => player.id === socketId);
 
-    if (index !== -1) {
-      const removedPlayer = this.players.splice(index, 1)[0];
+    if (index === -1) {
+      return null;
+    }
 
-      // Free hallway if removed player was standing in one
-      if (removedPlayer.location && this.board.locations[removedPlayer.location]?.type === "hallway") {
-        this.occupiedHallways = this.occupiedHallways.filter(
-          h => h !== removedPlayer.location
-        );
-      }
+    const removedPlayer = this.players[index];
+    const wasCurrentPlayer = removedPlayer.id === this.currentPlayerId;
 
-      // Adjust turn if current player left
-      if (removedPlayer.id === this.currentPlayerId) {
-        if (this.players.length > 0 && !this.gameOver) {
-          this.turnIndex = this.turnIndex % this.players.length;
-          this.currentPlayerId = this.players[this.turnIndex].id;
-        } else {
-          this.currentPlayerId = null;
-        }
+    // Remove the player
+    this.players.splice(index, 1);
+
+    // Free hallway if removed player was standing in one
+    if (
+      removedPlayer.location &&
+      this.board.locations[removedPlayer.location]?.type === "hallway"
+    ) {
+      this.occupiedHallways = this.occupiedHallways.filter(
+        h => h !== removedPlayer.location
+      );
+    }
+    
+    this.handlePendingDisproveAfterRemovedPlayer(removedPlayer);
+
+    // If nobody remains, clear turn state
+    if (this.players.length === 0) {
+      this.currentPlayerId = null;
+      this.turnIndex = 0;
+      this.pendingDisprove = null;
+      this.lastSuggestion = null;
+      return removedPlayer;
+    }
+
+    // If a non-current player before the current turn index left,
+    // adjust turnIndex so it still points to the same current player.
+    if (!wasCurrentPlayer) {
+      const currentIndex = this.players.findIndex(
+        p => p.id === this.currentPlayerId
+      );
+
+      if (currentIndex !== -1) {
+        this.turnIndex = currentIndex;
       }
 
       return removedPlayer;
     }
 
-    return null;
+    // If the current player left, give turn to the next player.
+    if (!this.gameOver) {
+      // After splice, "index" now points to the next player.
+      // If the removed player was last, wrap to 0.
+      this.turnIndex = index % this.players.length;
+
+      // Skip eliminated players
+      let safety = 0;
+      while (
+        this.players[this.turnIndex].eliminated &&
+        safety < this.players.length
+      ) {
+        this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        safety++;
+      }
+
+      const nextPlayer = this.players[this.turnIndex];
+
+      if (nextPlayer && !nextPlayer.eliminated) {
+        this.currentPlayerId = nextPlayer.id;
+
+        // CRITICAL FIX:
+        // New current player must get a fresh turn.
+        nextPlayer.moved = false;
+        nextPlayer.suggested = false;
+      } else {
+        this.gameOver = true;
+        this.winner = null;
+        this.currentPlayerId = null;
+      }
+    }
+
+    // Clear pending suggestion/disprove flow if the current player left mid-turn
+    this.pendingDisprove = null;
+    this.lastSuggestion = null;
+
+    return removedPlayer;
+  }
+
+
+  //find next nearest turn player who can disprove if disproving player disconnects 
+  handlePendingDisproveAfterRemovedPlayer(removedPlayer) {
+    if (!this.pendingDisprove || !removedPlayer) {
+      return;
+    }
+
+    const wasSuggester =
+      this.pendingDisprove.suggesterId === removedPlayer.id;
+
+    const wasResponder =
+      this.pendingDisprove.responderId === removedPlayer.id;
+
+    // If the suggester left, the suggestion no longer matters.
+    if (wasSuggester) {
+      this.pendingDisprove = null;
+      this.lastSuggestion = null;
+      return;
+    }
+
+    // If the current responder left, continue looking for another player.
+    if (wasResponder) {
+      console.log(
+        `${removedPlayer.character} disconnected while needing to disprove. Looking for next responder...`
+      );
+
+      this.pendingDisprove.responderId = null;
+      this.pendingDisprove.responderCharacter = null;
+      this.pendingDisprove.matchingCards = [];
+
+      this.triggerDisprove();
+    }
   }
 
   
@@ -119,7 +211,13 @@ class Game {
   playerMove(playerId, targetLoc) {
     const player = this.players.find(p => p.id === playerId);
 
-    if (!player || player.id !== this.currentPlayerId || player.moved || this.gameOver) {
+    if (
+      !player ||
+      player.id !== this.currentPlayerId ||
+      player.moved ||
+      this.gameOver ||
+      this.pendingDisprove
+    ) {
       return false;
     }
 
@@ -145,7 +243,13 @@ class Game {
   makeSuggestion(playerId, suspect, weapon) {
     const player = this.players.find(p => p.id === playerId);
 
-    if (!player || player.id !== this.currentPlayerId || player.suggested) {
+    if (
+      !player ||
+      player.id !== this.currentPlayerId ||
+      player.suggested ||
+      this.gameOver ||
+      this.pendingDisprove
+    ) {
       return false;
     }
 
@@ -255,7 +359,7 @@ class Game {
     this.lastSuggestion = null;
 
     this.broadcastGameState();
-    return true;
+    return false;
   }
 
   respondToSuggestion(playerId, cardShown) {
@@ -294,7 +398,13 @@ class Game {
   makeAccusation(playerId, suspect, weapon, room) {
     const player = this.players.find(p => p.id === playerId);
 
-    if (!player || player.id !== this.currentPlayerId || player.eliminated || this.gameOver) {
+    if (
+      !player ||
+      player.id !== this.currentPlayerId ||
+      player.eliminated ||
+      this.gameOver ||
+      this.pendingDisprove
+    ) {
       return { success: false, correct: false };
     }
 
@@ -346,9 +456,12 @@ class Game {
   endTurn(playerId) {
     const player = this.players.find(p => p.id === playerId);
 
-    if (!player || player.id !== this.currentPlayerId || this.gameOver) {
+    if (!player || player.id !== this.currentPlayerId || this.gameOver||this.pendingDisprove) {
       return false;
     }
+
+  
+
 
     // Clear last suggestion so temp summoned inactive sprites disappear on next update
     this.lastSuggestion = null;
@@ -375,6 +488,7 @@ class Game {
       lastSuggestion: this.lastSuggestion,
       winner: this.winner,
       solution: this.gameOver ? this.solution : null,
+      waitingForDisprove: !!this.pendingDisprove,
       ...extra
     };
   }
@@ -396,6 +510,7 @@ class Game {
       lastSuggestion: this.lastSuggestion,
       winner: this.winner,
       solution: this.gameOver ? this.solution : null,
+      waitingForDisprove: !!this.pendingDisprove,
       ...extra
     };
 

@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const Game = require('./Game');
-//const db = require("./config/firebase");   //uncomment after implementing firebase
+const db = require("./config/firebase");
 
 const path = require('path');
 const app = express();
@@ -138,6 +138,14 @@ io.on('connection', (socket) => {
 
     socket.emit("ROOM_JOINED", { roomCode: normalizedCode });
     socket.emit("GAME_STATE_UPDATE", session.game.getGameState());
+  });
+
+  socket.on("LEAVE_ROOM", () => {
+    console.log(`LEAVE_ROOM from ${socket.id} in room ${socket.data.roomCode}`);
+
+    leaveCurrentRoom(socket);
+
+    socket.emit("ROOM_LEFT");
   });
 
   //handle disconnect. For now, it deletes player but later, implement differing response based on reason
@@ -312,10 +320,68 @@ io.on('connection', (socket) => {
     const success = currentGame.endTurn(socket.id);
 
     if (!success) {
-      socket.emit('END_TURN_FAILED', { message: 'Cannot end turn.' });
+      socket.emit('END_TURN_FAILED', {
+        message: currentGame.pendingDisprove
+          ? 'Wait for the suggestion response before ending your turn.'
+          : 'Cannot end turn.'
+      });
     }
+
   });
 
+
+  ///asd
+  socket.on("GET_PENDING_DISPROVE", () => {
+    const currentGame = getGame(socket);
+
+    if (!currentGame || !currentGame.pendingDisprove) {
+      return;
+    }
+
+    const pending = currentGame.pendingDisprove;
+
+    // Only the current disprove responder should receive this.
+    if (pending.responderId !== socket.id) {
+      return;
+    }
+
+    const player = currentGame.players.find(p => p.id === socket.id);
+
+    if (!player) {
+      return;
+    }
+
+    const matches = currentGame.getMatchingCards(player, pending);
+
+    // Safety check: if somehow this responder no longer has a matching card,
+    // move to the next possible responder instead of hanging.
+    if (matches.length === 0) {
+      console.log(
+        `${player.character} was pending disprove but has no matching cards. Finding next responder.`
+      );
+
+      currentGame.pendingDisprove.responderId = null;
+      currentGame.pendingDisprove.responderCharacter = null;
+      currentGame.pendingDisprove.matchingCards = [];
+
+      currentGame.triggerDisprove();
+      currentGame.broadcastGameState();
+      return;
+    }
+
+    const summary =
+      `${pending.suggesterCharacter} suggested ` +
+      `${pending.suspect}, ${pending.weapon}, ${pending.room}.`;
+
+    socket.emit("SUGGESTION_STATUS", {
+      message: `${summary} You must present a matching card.`
+    });
+
+    socket.emit("DISPROVE_REQUEST", {
+      cards: matches,
+      message: `${summary} You must present a matching card.`
+    });
+  });
 
 
 
